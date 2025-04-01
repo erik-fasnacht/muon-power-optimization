@@ -1,7 +1,7 @@
 /* 
- * Project myProject
- * Author: Your Name
- * Date: 
+ * Project Muon + M-SoM Solar Powered Wake Sleep Example
+ * Author: Erik Fasnacht
+ * Date: 3/31/2025
  * For comprehensive documentation and examples, please visit:
  * https://docs.particle.io/firmware/best-practices/firmware-template/
  */
@@ -18,12 +18,17 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
   SYSTEM_THREAD(ENABLED);
 #endif
 
+// defines flag and address for writing and reading the flash PM_FLAG value
+#define PM_FLAG 0x5555
+#define EEPROM_ADDR 10
+
 // Using Serial1 (RX/TX) for debugging logs and an external TTL serial to USB (FT232) converter
 // is useful when testing sleep modes. Sleep causes USB serial to disconnect, and you will often
 // lose the debug logs immediately after wake. With an external USB serial converter, your
 // serial terminal stays connected so you get all log messages. If you don't have one, you can
 // comment out the Serial1LogHandler and uncomment the SerialLogHandler to use USB.
 Serial1LogHandler logHandler(115200);
+//SerialLogHandler logHandler1(LOG_LEVEL_INFO);
 
 // This is the maximum amount of time to wait for the cloud to be connected in
 // milliseconds. This should be at least 5 minutes. If you set this limit shorter,
@@ -55,14 +60,17 @@ const std::chrono::milliseconds PUBLISH_PERIOD = 15min;
 // These are the states in the finite state machine, handled in loop()
 enum State {
     STATE_WAIT_CONNECTED = 0,
-    STATE_PUBLISH,
-    STATE_PRE_SLEEP,
-    STATE_SLEEP,
-    STATE_FIRMWARE_UPDATE
+    STATE_PUBLISH = 1,
+    STATE_PRE_SLEEP = 2,
+    STATE_SLEEP = 3,
+    STATE_FIRMWARE_UPDATE = 4
 };
 
 // sets battery threshold level
 const float LOW_BATTERY_THRESHOLD = 15;    
+
+// sets the value for PMIC_INT
+const pin_t PMIC_INTERRUPT_PIN = A7;
 
 // constant expression for battery states
 constexpr char const* batteryStates[] = {                 
@@ -86,36 +94,51 @@ unsigned long lastPublish;                // used for last publish time
 State state = STATE_WAIT_CONNECTED;       // set the initial device state
 unsigned long stateTime;                  // used for the timers between states
 bool firmwareUpdateInProgress = false;    // used for determining firwmare is in progress
+uint16_t powerModuleConfig = 0;
 
 // setup() runs once, when the device is first turned on
 void setup() {
   
-  // set power module configuration
-  SystemPowerConfiguration conf;
-    conf.powerSourceMaxCurrent(1500)                              // sets max current from power source (set to max)
-      .powerSourceMinVoltage(3880)                                // sets min batt voltage
-      .batteryChargeCurrent(900)                                  // sets batt charge current, size based off of solar panel
-      .batteryChargeVoltage(4112)                                 // sets batt charge voltage
-      .feature(SystemPowerFeature::PMIC_DETECTION)                // enables PMIC Detection
-      .auxiliaryPowerControlPin(PIN_INVALID).interruptPin(A7);    // disables 3V3_AUX
-  int res = System.setPowerConfiguration(conf); 
-  Log.info("setPowerConfiguration=%d", res);
-  // returns SYSTEM_ERROR_NONE (0) in case of success
+  // power module hasn't been configured already
+  // configuration writes value in flash so don't want to overly configure values, just once
+  EEPROM.get(EEPROM_ADDR, powerModuleConfig);
+  if (powerModuleConfig != PM_FLAG)
+  {
+    Log.info("Configuring Power Module");
+    // set power module configuration
+    SystemPowerConfiguration conf;
+      conf.powerSourceMaxCurrent(1500)                                              // sets max current from power source (set to max)
+        .powerSourceMinVoltage(3880)                                                // sets min batt voltage
+        .batteryChargeCurrent(900)                                                  // sets batt charge current, size based off of solar panel
+        .batteryChargeVoltage(4112)                                                 // sets batt charge voltage
+        .feature(SystemPowerFeature::PMIC_DETECTION)                                // enables PMIC Detection
+        .auxiliaryPowerControlPin(PIN_INVALID).interruptPin(PMIC_INTERRUPT_PIN);    // disables 3V3_AUX
+    int res = System.setPowerConfiguration(conf); 
+    Log.info("setPowerConfiguration=%d", res);
+    // returns SYSTEM_ERROR_NONE (0) in case of success
+
+    // write flag value to EEPROM
+    EEPROM.put(EEPROM_ADDR, PM_FLAG);
+    Log.info("Setting PM_FLAG");
+  }
+  
 
   // firmware update handler to delay sleep while an update is being downloaded
   System.on(firmware_update, firmwareUpdateHandler);
      
-  // check battery level
+  // check battery level and state
   delay(5s);                                    // delay before reading from the PMIC, EAF @RICK without this delay I get whonky values from time to time
   float batterySoc = System.batteryCharge();    // read the battery SoC from PMIC
-  if (batterySoc >= LOW_BATTERY_THRESHOLD) {
+  int batteryState = System.batteryState();     // read the battery state from PMIC
+  Log.info("Battery state: %s", batteryStates[std::max(0, batteryState)]);
+  Log.info("Battery charge: %f", batterySoc);
 
+  if ((batterySoc >= LOW_BATTERY_THRESHOLD) || ((batteryState == 2) || (batteryState == 3))) {
     // It's only necessary to turn cellular on and connect to the cloud. Stepping up
     // one layer at a time with Cellular.connect() and wait for Cellular.ready() can
     // be done but there's little advantage to doing so.
-    Cellular.on();    //EAF is this really needed?
+    Cellular.on();    
     Particle.connect();
-    waitFor(Particle.connected, 60000);   //EAF not sure what's best practice here or if this is really necessary?
 
     // set the stateTime variable to the current millis() time
     stateTime = millis();
@@ -124,12 +147,12 @@ void setup() {
 
   // go back to sleep
   else  {
-    Log.info("Fail to connect due to Battery charge: %f", batterySoc);
-    
+    Log.info("Fail to connect due to Battery charge: %f", batterySoc);      
+
     // Prepare for sleep
     SystemSleepConfiguration config;
     config.mode(SystemSleepMode::ULTRA_LOW_POWER)   // set sleep to ULP
-      .gpio(A7, FALLING)                            // wake of PMIC _INT (toggle low when changed noted)
+      .gpio(PMIC_INTERRUPT_PIN, FALLING)            // wake of PMIC _INT (toggle low when changed noted)
       .duration(sleepTime);                         // wake on defined interval
     System.sleep(config);
 
@@ -155,7 +178,7 @@ void loop() {
 
   switch(state) {
         case STATE_WAIT_CONNECTED:
-            // Wait for the connection to the Particle cloud to complete
+            // Wait for the connection to the Particle cloud to complete, no break, want switch case to fall through
             if (Particle.connected()) {
                 Log.info("connected to the cloud in %lu ms", millis() - stateTime);
                 state = STATE_PUBLISH; 
@@ -232,16 +255,23 @@ void loop() {
             // go to sleep
             Log.info("going to sleep for %ld seconds", (long) sleepTime.count());
             {
+              
+              // gracefully disconnect from network
+              Particle.disconnect(CloudDisconnectOptions().graceful(true).timeout(5000));        
+              Network.disconnect();         
+              Network.off();
+              Cellular.off();                                 
+    
               // Prepare for sleep
-              Cellular.off();                                 //EAF is this really needed?
               SystemSleepConfiguration config;
               config.mode(SystemSleepMode::ULTRA_LOW_POWER)   // set sleep to ULP
-                .gpio(A7, FALLING)                            // wake of PMIC _INT (toggle low when changed noted)
+                .gpio(PMIC_INTERRUPT_PIN, FALLING)            // wake of PMIC _INT (toggle low when changed noted)
                 .duration(sleepTime);                         // wake on defined interval
               System.sleep(config);
 
               // to mimic hibernation mode, reset device (re-run setup())
-              System.reset();   // reset the system, ULP continues execution where it left off
+              System.reset();   // reset the system, ULP continues execution where it
+
             }
             // This is never reached; when the device wakes from sleep it will start over with setup() due to System.reset()
             break; 
