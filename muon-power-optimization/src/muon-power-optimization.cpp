@@ -1,7 +1,7 @@
 /* 
  * Project Muon + M-SoM Solar Powered Wake Sleep Example
  * Author: Erik Fasnacht
- * Date: 3/31/2025
+ * Date: 4/03/2025
  * For comprehensive documentation and examples, please visit:
  * https://docs.particle.io/firmware/best-practices/firmware-template/
  */
@@ -107,11 +107,11 @@ void setup() {
     Log.info("Configuring Power Module");
     // set power module configuration
     SystemPowerConfiguration conf;
-      conf.powerSourceMaxCurrent(1500)                                              // sets max current from power source (set to max)
-        .powerSourceMinVoltage(3880)                                                // sets min batt voltage
-        .batteryChargeCurrent(900)                                                  // sets batt charge current, size based off of solar panel
-        .batteryChargeVoltage(4112)                                                 // sets batt charge voltage
-        .feature(SystemPowerFeature::PMIC_DETECTION)                                // enables PMIC Detection
+      conf.powerSourceMaxCurrent(1500)    // sets max current from power source (set to max)
+        .powerSourceMinVoltage(3880)      // sets min batt voltage
+        .batteryChargeCurrent(900)        // sets batt charge current, size based off of solar panel
+        .batteryChargeVoltage(4112)       // sets batt charge voltage
+        .feature(SystemPowerFeature::PMIC_DETECTION)    // enables PMIC Detection
         .auxiliaryPowerControlPin(PIN_INVALID).interruptPin(PMIC_INTERRUPT_PIN);    // disables 3V3_AUX
     int res = System.setPowerConfiguration(conf); 
     Log.info("setPowerConfiguration=%d", res);
@@ -136,14 +136,13 @@ void setup() {
   Log.info("Battery charge: %f", batterySoc);
 
   if ((batterySoc >= LOW_BATTERY_THRESHOLD) || ((batteryState == 2))) {
-    // It's only necessary to turn cellular on and connect to the cloud. Stepping up
-    // one layer at a time with Cellular.connect() and wait for Cellular.ready() can
+    // It's only necessary to connect to the cloud. Stepping up one layer
+    // at a time with Cellular.connect() and wait for Cellular.ready() can
     // be done but there's little advantage to doing so.
     Particle.connect();
 
     // set the stateTime variable to the current millis() time
-    stateTime = millis();
-      
+    stateTime = millis(); 
   }
 
   // go back to sleep
