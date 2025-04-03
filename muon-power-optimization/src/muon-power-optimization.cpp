@@ -121,23 +121,24 @@ void setup() {
     EEPROM.put(EEPROM_ADDR, PM_FLAG);
     Log.info("Setting PM_FLAG");
   }
-  
 
   // firmware update handler to delay sleep while an update is being downloaded
   System.on(firmware_update, firmwareUpdateHandler);
+
+  // sets global disconnect options from the cloud and handles disconnects gracefully with a timeout
+  Particle.setDisconnectOptions(CloudDisconnectOptions().graceful(true).timeout(5s));
      
   // check battery level and state
-  delay(5s);                                    // delay before reading from the PMIC, EAF @RICK without this delay I get whonky values from time to time
+  delay(5s);                                    // delay before reading from the PMIC, gives the PMIC time to settle before reading
   float batterySoc = System.batteryCharge();    // read the battery SoC from PMIC
   int batteryState = System.batteryState();     // read the battery state from PMIC
   Log.info("Battery state: %s", batteryStates[std::max(0, batteryState)]);
   Log.info("Battery charge: %f", batterySoc);
 
-  if ((batterySoc >= LOW_BATTERY_THRESHOLD) || ((batteryState == 2) || (batteryState == 3))) {
+  if ((batterySoc >= LOW_BATTERY_THRESHOLD) || ((batteryState == 2))) {
     // It's only necessary to turn cellular on and connect to the cloud. Stepping up
     // one layer at a time with Cellular.connect() and wait for Cellular.ready() can
     // be done but there's little advantage to doing so.
-    Cellular.on();    
     Particle.connect();
 
     // set the stateTime variable to the current millis() time
@@ -256,11 +257,9 @@ void loop() {
             Log.info("going to sleep for %ld seconds", (long) sleepTime.count());
             {
               
-              // gracefully disconnect from network
-              Particle.disconnect(CloudDisconnectOptions().graceful(true).timeout(5000));        
+              // gracefully disconnect from network, required when using SEMI_AUTOMATIC mode
               Network.disconnect();         
-              Network.off();
-              Cellular.off();                                 
+              Network.off();        
     
               // Prepare for sleep
               SystemSleepConfiguration config;
@@ -270,7 +269,7 @@ void loop() {
               System.sleep(config);
 
               // to mimic hibernation mode, reset device (re-run setup())
-              System.reset();   // reset the system, ULP continues execution where it
+              System.reset();   // reset the system, ULP continues execution where it left off
 
             }
             // This is never reached; when the device wakes from sleep it will start over with setup() due to System.reset()
