@@ -57,36 +57,53 @@ if (powerModuleConfig != PM_FLAG)
 
 ```cpp
 // check battery level and state
-delay(5s);                                    // delay before reading from the PMIC, gives the PMIC time to settle before reading
-float batterySoc = System.batteryCharge();    // read the battery SoC from PMIC
-int batteryState = System.batteryState();     // read the battery state from PMIC
-Log.info("Battery state: %s", batteryStates[std::max(0, batteryState)]);
-Log.info("Battery charge: %f", batterySoc);
+  delay(5s);                                    // delay before reading from the PMIC, gives the PMIC time to settle before reading
+  float batterySoc = System.batteryCharge();    // read the battery SoC from PMIC
+  int batteryState = System.batteryState();     // read the battery state from PMIC
+  Log.info("Battery state: %s", batteryStates[std::max(0, batteryState)]);
+  Log.info("Battery charge: %f", batterySoc);
 
-if ((batterySoc >= LOW_BATTERY_THRESHOLD) || ((batteryState == 2))) {
-  // It's only necessary to connect to the cloud. Stepping up one layer
-  // at a time with Cellular.connect() and wait for Cellular.ready() can
-  // be done but there's little advantage to doing so.
-  Particle.connect();
+  if ((batterySoc >= LOW_BATTERY_THRESHOLD) || ((batteryState == 2))) {
+    // It's only necessary to connect to the cloud. Stepping up one layer
+    // at a time with Cellular.connect() and wait for Cellular.ready() can
+    // be done but there's little advantage to doing so.
+    Particle.connect();
 
-  // set the stateTime variable to the current millis() time
-  stateTime = millis();   
-}
+    // if device doesn't connect due to connection timeout, go back to sleep
+    waitFor(Particle.connected, 60000);  
+    if (!Particle.connected()) {
+      Log.info("Fail to connect, connection timeout");      
 
-// go back to sleep
-else  {
-  Log.info("Fail to connect due to Battery charge: %f", batterySoc);      
+      // Prepare for sleep
+      SystemSleepConfiguration config;
+      config.mode(SystemSleepMode::ULTRA_LOW_POWER)   // set sleep to ULP
+        .gpio(PMIC_INTERRUPT_PIN, FALLING)            // wake of PMIC _INT (toggle low when changed noted)
+        .duration(sleepTime);                         // wake on defined interval
+      System.sleep(config);
 
-  // Prepare for sleep
-  SystemSleepConfiguration config;
-  config.mode(SystemSleepMode::ULTRA_LOW_POWER)   // set sleep to ULP
-    .gpio(PMIC_INTERRUPT_PIN, FALLING)            // wake of PMIC _INT (toggle low when changed noted)
-    .duration(sleepTime);                         // wake on defined interval
-  System.sleep(config);
+      // to mimic hibernation mode, reset device (re-run setup())
+      System.reset();   // reset the system, ULP continues execution where it left off
+    }
 
-  // to mimic hibernation mode, reset device (re-run setup())
-  System.reset();   // reset the system, ULP continues execution where it left off
-}
+    // set the stateTime variable to the current millis() time
+    stateTime = millis(); 
+
+  }
+
+  // go back to sleep
+  else  {
+    Log.info("Fail to connect due to Battery charge: %f", batterySoc);      
+
+    // Prepare for sleep
+    SystemSleepConfiguration config;
+    config.mode(SystemSleepMode::ULTRA_LOW_POWER)   // set sleep to ULP
+      .gpio(PMIC_INTERRUPT_PIN, FALLING)            // wake of PMIC _INT (toggle low when changed noted)
+      .duration(sleepTime);                         // wake on defined interval
+    System.sleep(config);
+
+    // to mimic hibernation mode, reset device (re-run setup())
+    System.reset();   // reset the system, ULP continues execution where it left off
+  }
 ```
 
 ### ULP Mode Sleep Logic
